@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>全単射の砂場 v7 (Trojans Sandbox)</title>
+  <style>
+    /* === Trojans Sandbox CSS === */
+    :root {
+      /* JSのCONFIGと同期させる */
+      --slime-radius: 30px;
+      --slime-diameter: 60px;
+      --slime-color-default: #3b82f6;
+      
+      --ui-appear-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --slime-move-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --ripple-size: 100px;
+    }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      background-color: #f0f4f8;
+      font-family: 'Courier New', Courier, monospace;
+    }
+
+    #sandbox {
+      width: 100vw;
+      min-height: 100vh;
+      position: relative;
+      touch-action: pan-y;
+      transition: min-height 0.5s ease;
+    }
+
+    /* Onboarding (ripple & zero) */
+    #onboarding {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center; pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+    #onboarding h1 { font-size: 5rem; color: #94a3b8; margin: 0; }
+    .ripple {
+      position: absolute; top: 50%; left: 50%;
+      width: var(--ripple-size); height: var(--ripple-size);
+      margin-top: calc(var(--ripple-size) / -2);
+      margin-left: calc(var(--ripple-size) / -2);
+      border: 4px solid #cbd5e1; border-radius: 50%;
+      animation: rippleAnim 2s infinite ease-out;
+    }
+    @keyframes rippleAnim { 0% { transform: scale(0.8); opacity: 1; } 100% { transform: scale(2.5); opacity: 0; } }
+
+    /* Slime styles */
+    .slime {
+      position: absolute;
+      width: var(--slime-diameter); height: var(--slime-diameter);
+      background-color: var(--slime-color-default);
+      border-radius: 50%;
+      color: white; font-size: 1.5rem; font-weight: bold;
+      display: flex; justify-content: center; align-items: center;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      transition: background-color 0.3s;
+      cursor: grab; user-select: none;
+      touch-action: none;
+    }
+    .slime:active { cursor: grabbing; transform: scale(0.9); }
+    .slime.animate-move {
+      transition: left 0.5s var(--slime-move-ease), 
+                  top 0.5s var(--slime-move-ease), 
+                  background-color 0.3s;
+    }
+
+    /* UI Buttons (Whistle and Bomb) */
+    .ui-btn {
+      position: fixed; bottom: 30px;
+      width: 80px; height: 80px;
+      border-radius: 50%;
+      display: flex; justify-content: center; align-items: center;
+      font-size: 2rem;
+      cursor: pointer;
+      opacity: 0; transform: scale(0);
+      transition: all 0.5s var(--ui-appear-ease), background-color 0.3s ease;
+      z-index: 100;
+    }
+    .ui-btn.visible { opacity: 1; transform: scale(1); }
+
+    #whistle {
+      right: 30px;
+      background-color: #fbbf24;
+      box-shadow: 0 10px 15px rgba(0,0,0,0.2);
+    }
+
+    #bomb {
+      left: 30px;
+      background-color: #1f2937;
+      box-shadow: 0 10px 15px rgba(0,0,0,0.3);
+    }
+
+    /* Throw-arrows (simple version) */
+    #throw-arrows {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      pointer-events: none; z-index: 50;
+      opacity: 0; transition: opacity 0.3s ease;
+    }
+    #throw-arrows.active { opacity: 1; }
+    .arrow {
+      position: absolute;
+      color: rgba(148, 163, 184, 0.5); /* 控えめなグレー */
+      font-size: 3rem;
+      animation: pulseArrow 1.5s infinite;
+    }
+    .arrow.up    { top: 10px; left: 50%; }
+    .arrow.down  { bottom: 10px; left: 50%; }
+    .arrow.left  { top: 50%; left: 10px; }
+    .arrow.right { top: 50%; right: 10px; }
+
+    @keyframes pulseArrow {
+      0%, 100% { opacity: 0.3; transform: translate(-50%, -50%) scale(0.9); }
+      50% { opacity: 0.8; transform: translate(-50%, -50%) scale(1.1); }
+    }
+    /* translate dependency for centering handled in JS init */
+
+    /* FX particles and shake */
+    @keyframes shake {
+      0%, 100% { transform: translate(0px, 0px) rotate(0deg); }
+      20% { transform: translate(-2px, -2px) rotate(-2deg); }
+      40% { transform: translate(2px, -1px) rotate(2deg); }
+      60% { transform: translate(-1px, 2px) rotate(-1deg); }
+      80% { transform: translate(2px, 1px) rotate(1deg); }
+    }
+    .shake-active { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
+
+    .particle {
+      position: absolute; width: 12px; height: 12px;
+      background-color: #ef4444; border-radius: 50%;
+      pointer-events: none; transition: all 0.5s ease-out; z-index: 50;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="sandbox">
+    <div id="throw-arrows">
+      <div class="arrow up">▲</div>
+      <div class="arrow down">▼</div>
+      <div class="arrow left">◀</div>
+      <div class="arrow right">▶</div>
+    </div>
+    <div id="onboarding">
+      <div class="ripple"></div>
+      <h1 id="zero">0</h1>
+    </div>
+    <div id="bomb" class="ui-btn">💣</div>
+    <div id="whistle" class="ui-btn">🎺</div>
+  </div>
+
+  <script>
+    /* === Trojans Sandbox JS === */
+
+    // --- Constants / Configuration ---
+    // ここにすべてのマジックナンバーを集約
+    const CONFIG = {
+      SLIME: {
+        RADIUS: 30, // px
+        COLOR_DEFAULT: '#3b82f6',
+        COLOR_FEEDBACK: '#60a5fa', // Label update feedback
+        COLOR_DANGER: '#ef4444', // Used for arranged mode whistle
+        // 個性の範囲 (スピード)
+        SPEED_RANGE: { MIN: 1.0, MAX: 3.0 }, 
+        DEFAULT_SPEED: 2.0, // フォールバック用
+      },
+      UI: {
+        DELETE_ZONE_MARGIN: 40, // px from screen edge
+        WHISTLE_THRESHOLD: 5, // slimes needed to show whistle
+        RIPPLE_SIZE: 100, // px
+      },
+      ARRANGE: { // Vertical Stacking (5x2 frame)
+        SPACING: 70, // px
+        GROUP_SIZE: 10,
+        GROUP_COLS: 5,
+        GROUP_ROWS: 2,
+        GROUP_MARGIN_Y: 60, // px between 10-groups
+        START_X_Y_OFFSET: 100, // px from top
+      },
+      SOUND: {
+        SYNTH: {
+          create: { type: 'sine', frequency: [440, 880], gain: [0.3, 0.01], stop: 0.1 },
+          delete: { type: 'square', frequency: [200, 50], gain: [0.2, 0.01], stop: 0.2 },
+          whistle: { type: 'sawtooth', frequency: [600, 800], gain: [0.3, 0.01], stop: 0.4 },
+          explosion: { type: 'sawtooth', frequency: [150, 20], gain: [0.5, 0.01], stop: 0.6 }
+        },
+        SPEECH: { LANG: 'ja-JP', PITCH: 1.2, RATE: 1.0, }
+      },
+      PARTICLES: {
+        COUNT_DELETE: 8,
+        COUNT_EXPLOSION: 10,
+        DURATION_MS: 500,
+        DIST_MIN: 30,
+        DIST_MAX: 100,
+      }
+    };
+
+    // --- State ---
+    // すべての状態を集約
+    const state = {
+      dom: {
+        sandbox: document.getElementById('sandbox'),
+        throwArrows: document.getElementById('throw-arrows'),
+        onboarding: document.getElementById('onboarding'),
+        whistleBtn: document.getElementById('whistle'),
+        bombBtn: document.getElementById('bomb'),
+      },
+      audioCtx: null, // Initialized on user action
+      slimes: [], // Array of slime objects: { el, x, y, speed, vx, vy, isDragging }
+      isArranged: false, // Flag for arranged mode
+    };
+
+    // --- Initialization ---
+    function init() {
+      // translate dependencies for centering arrows (CSS is limited)
+      document.querySelectorAll('.arrow').forEach(a => {
+        if(a.classList.contains('up') || a.classList.contains('down')) a.style.setProperty('--tx', '-50%');
+        if(a.classList.contains('left') || a.classList.contains('right')) a.style.setProperty('--ty', '-50%');
+      });
+      addEventListeners();
+    }
+
+    // --- Event Listeners and Handlers ---
+    function addEventListeners() {
+      // Sandbox Background Tap (Create)
+      state.dom.sandbox.addEventListener('pointerdown', handleSandboxTap);
+
+      // Whistle Button (Toggle Arrange)
+      state.dom.whistleBtn.addEventListener('pointerdown', handleWhistleTap);
+
+      // Bomb Button (Explode All)
+      state.dom.bombBtn.addEventListener('pointerdown', handleBombTap);
+    }
+
+    function handleSandboxTap(e) {
+      if (e.target !== state.dom.sandbox) return;
+      
+      // First tap handling (hide onboarding, start physics)
+      if (state.dom.onboarding.style.opacity !== '0') {
+        state.dom.onboarding.style.opacity = '0';
+        requestAnimationFrame(updatePhysicsSteadyWalk);
+      }
+      
+      const y = e.clientY + window.scrollY; // Accounting for scroll
+      createSlime(e.clientX, y);
+    }
+
+    function handleWhistleTap(e) {
+      e.stopPropagation();
+      playSoundSynth('whistle');
+      toggleArrangeMode();
+    }
+
+    function handleBombTap(e) {
+      e.stopPropagation();
+      if (state.slimes.length === 0) return;
+      explodeAllSlimes();
+    }
+
+    // --- Sound and Speech (Web Audio API & Web Speech API) ---
+    function playSoundSynth(type) {
+      if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
+      const s = CONFIG.SOUND.SYNTH[type];
+      if (!s) return;
+      
+      const osc = state.audioCtx.createOscillator();
+      const gainNode = state.audioCtx.createGain();
+      osc.connect(gainNode);
+      gainNode.connect(state.audioCtx.destination);
+      
+      osc.type = s.type;
+      
+      // Base frequency: fixed for explosion, dynamic (pitch shifts with count) for others
+      const baseFreq = type === 'explosion' ? s.frequency[0] : s.frequency[0] + state.slimes.length * 20;
+      
+      osc.frequency.setValueAtTime(baseFreq, state.audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(s.frequency[1], state.audioCtx.currentTime + s.stop);
+      
+      gainNode.gain.setValueAtTime(s.gain[0], state.audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(s.gain[1], state.audioCtx.currentTime + s.stop);
+      
+      osc.start();
+      osc.stop(state.audioCtx.currentTime + s.stop);
+    }
+
+    function speak(text) {
+      if ('speechSynthesis' in window) {
+        const s = CONFIG.SOUND.SPEECH;
+        window.speechSynthesis.cancel();
+        const uttr = new SpeechSynthesisUtterance(text);
+        uttr.lang = s.LANG;
+        uttr.pitch = s.PITCH;
+        uttr.rate = s.RATE;
+        window.speechSynthesis.speak(uttr);
+      }
+    }
+
+    // --- Slime Mechanics (CRUD and Interaction) ---
+
+    // 1. Slime Object Definition and Creation
+    function createSlime(x, y) {
+      playSoundSynth('create');
+      const R = CONFIG.SLIME.RADIUS;
+      
+      const el = document.createElement('div');
+      el.className = 'slime animate-move';
+      el.style.left = `${x - R}px`;
+      el.style.top = `${y - R}px`;
+      state.dom.sandbox.appendChild(el);
+      
+      // Generate individual speed and random angle (个性化)
+      const angle = Math.random() * Math.PI * 2;
+      const sConf = CONFIG.SLIME.SPEED_RANGE;
+      const speed = sConf.MIN + Math.random() * (sConf.MAX - sConf.MIN);
+      
+      const slimeObj = { 
+        el, x, y, 
+        speed: speed, // 個性を保存
+        vx: Math.cos(angle) * speed, 
+        vy: Math.sin(angle) * speed, 
+        isDragging: false 
+      };
+      state.slimes.push(slimeObj);
+      
+      // Initialize Slime interaction listeners
+      setupSlimeInteraction(slimeObj);
+      
+      updateLabels();
+      updateUIState();
+      if (state.isArranged) arrangeSlimes(); // Join the ranks immediately if arranged mode is active
+    }
+
+    // Setup Drag&Drop, Tap (Speak), Delete handlers
+    function setupSlimeInteraction(slime) {
+      const el = slime.el;
+      const R = CONFIG.SLIME.RADIUS;
+      const D = CONFIG.UI.DELETE_ZONE_MARGIN;
+      let startPosX, startPosY;
+      
+      el.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        el.setPointerCapture(e.pointerId);
+        slime.isDragging = true;
+        startPosX = e.clientX;
+        startPosY = e.clientY;
+        el.classList.remove('animate-move'); // No CSS animation while dragging
+        el.style.zIndex = 1000;
+        
+        // Show throw arrows indicators
+        state.dom.throwArrows.classList.add('active');
+      });
+
+      el.addEventListener('pointermove', (e) => {
+        if (!slime.isDragging) return;
+        // Follow the finger, accounting for potential vertical scroll
+        slime.x = e.clientX;
+        slime.y = e.clientY + window.scrollY;
+        el.style.left = `${slime.x - R}px`;
+        el.style.top = `${slime.y - R}px`;
+      });
+
+      el.addEventListener('pointerup', (e) => {
+        if (!slime.isDragging) return;
+        slime.isDragging = false;
+        el.releasePointerCapture(e.pointerId);
+        el.style.zIndex = '';
+        el.classList.add('animate-move'); // Restore CSS animation
+        
+        // Hide throw indicators
+        state.dom.throwArrows.classList.remove('active');
+
+        const distMoved = Math.hypot(e.clientX - startPosX, e.clientY - startPosY);
+        
+        // Check if thrown out of bounds (viewport criteria)
+        const isOutOfBounds = e.clientX < D || e.clientX > window.innerWidth - D ||
+                              e.clientY < D || e.clientY > window.innerHeight - D;
+
+        if (distMoved < 10) {
+          // Tap detection (dist moved is small): just speak
+          speak(el.innerText);
+        } else if (isOutOfBounds) {
+          // Thrown out of bounds: delete (subtraction)
+          deleteSlime(slime);
+          if (state.isArranged) arrangeSlimes(); // Re-arrange others immediately
+        }
+      });
+    }
+
+    // 2. Slime Deletion (Subtraction and Re-indexing)
+    function deleteSlime(slime) {
+      playSoundSynth('delete');
+      speak(slime.el.innerText); // Speak the re-indexed number before deleting
+
+      createParticles(slime.x, slime.y, CONFIG.PARTICLES.COUNT_DELETE);
+      
+      state.dom.sandbox.removeChild(slime.el);
+      state.slimes = state.slimes.filter(s => s !== slime);
+      
+      // Feedback: momentarily change others' color to show "re-indexing"
+      state.slimes.forEach(s => {
+        s.el.style.backgroundColor = CONFIG.SLIME.COLOR_FEEDBACK;
+        setTimeout(() => s.el.style.backgroundColor = CONFIG.SLIME.COLOR_DEFAULT, 200);
+      });
+
+      updateLabels();
+      updateUIState();
+      
+      if (state.slimes.length === 0) resetToInitialState();
+    }
+
+    // 3. Label Updates (Full bijection mapping 1..N to el.innerText)
+    function updateLabels() {
+      state.slimes.forEach((slime, index) => {
+        slime.el.innerText = index + 1;
+      });
+    }
+
+    // 4. Particle Effects
+    function createParticles(x, y, count) {
+      const pConf = CONFIG.PARTICLES;
+      for(let i=0; i<count; i++) {
+        const p = document.createElement('div');
+        p.className = 'particle';
+        p.style.left = `${x}px`;
+        p.style.top = `${y}px`;
+        state.dom.sandbox.appendChild(p);
+        
+        const angle = Math.random() * Math.PI * 2;
+        const dist = pConf.DIST_MIN + Math.random() * (pConf.DIST_MAX - pConf.DIST_MIN);
+        
+        setTimeout(() => {
+          // Animate particle flying and fading
+          p.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px) scale(0)`;
+          p.style.opacity = '0';
+        }, 10);
+        
+        // Remove from DOM
+        setTimeout(() => state.dom.sandbox.removeChild(p), pConf.DURATION_MS);
+      }
+    }
+
+    // 5. Bomb: Explode All
+    function explodeAllSlimes() {
+      playSoundSynth('explosion');
+      
+      // Screen shake feedback
+      state.dom.sandbox.classList.add('shake-active');
+      setTimeout(() => state.dom.sandbox.classList.remove('shake-active'), 400);
+
+      // Generate particles at each slime position
+      state.slimes.forEach(slime => {
+        createParticles(slime.x, slime.y, CONFIG.PARTICLES.COUNT_EXPLOSION);
+      });
+
+      // Remove all slimes from DOM and clear array
+      state.slimes.forEach(slime => state.dom.sandbox.removeChild(slime.el));
+      state.slimes = [];
+
+      updateUIState();
+      resetToInitialState();
+      
+      // Button active animation
+      state.dom.bombBtn.style.transform = 'scale(0.8)';
+      setTimeout(() => state.dom.bombBtn.style.transform = 'scale(1)', 150);
+    }
+
+    // --- Physics Engine (Steady Walk / Chaos Walk) ---
+    function updatePhysicsSteadyWalk() {
+      if (state.isArranged) return;
+      
+      const scrollY = window.scrollY;
+      const viewHeight = window.innerHeight;
+      const viewWidth = window.innerWidth;
+      const R = CONFIG.SLIME.RADIUS;
+
+      state.slimes.forEach(slime => {
+        if (slime.isDragging) return; // Don't move if dragging
+        
+        // Linear steady movement
+        slime.x += slime.vx;
+        slime.y += slime.vy;
+        
+        // Wall bounce detection and correction
+        if (slime.x < R) { slime.x = R; slime.vx *= -1; }
+        else if (slime.x > viewWidth - R) { slime.x = viewWidth - R; slime.vx *= -1; }
+
+        if (slime.y < scrollY + R) { slime.y = scrollY + R; slime.vy *= -1; }
+        else if (slime.y > scrollY + viewHeight - R) { slime.y = scrollY + viewHeight - R; slime.vy *= -1; }
+        
+        // Reflect physical position to DOM
+        slime.el.style.left = `${slime.x - R}px`;
+        slime.el.style.top = `${slime.y - R}px`;
+      });
+      
+      requestAnimationFrame(updatePhysicsSteadyWalk);
+    }
+
+    // --- Arrange Mode (10-frame stacking) ---
+    function toggleArrangeMode() {
+      state.isArranged = !state.isArranged;
+      
+      if (state.isArranged) {
+        // Enable Arrange Mode: stacks slimes in the middle
+        arrangeSlimes();
+        state.dom.whistleBtn.style.backgroundColor = CONFIG.SLIME.COLOR_DANGER; // Feedback: button turns red (reset button feel)
+      } else {
+        // Back to Chaos Mode
+        resetToChaosWalk();
+      }
+      
+      // Button active animation
+      state.dom.whistleBtn.style.transform = 'scale(0.8)';
+      setTimeout(() => state.dom.whistleBtn.style.transform = 'scale(1)', 150);
+    }
+
+    function arrangeSlimes() {
+      const a = CONFIG.ARRANGE;
+      const spacing = a.SPACING;
+      const groupWidth = a.GROUP_COLS * spacing;
+      const groupHeight = a.GROUP_ROWS * spacing;
+      const groupMarginY = a.GROUP_MARGIN_Y;
+      const R = CONFIG.SLIME.RADIUS;
+      
+      // Horizontal start point (screen center)
+      const startX = (window.innerWidth - groupWidth) / 2 + spacing/2;
+      // Vertical start point (fixed offset from top)
+      const startY = a.START_X_Y_OFFSET;
+      
+      state.slimes.forEach((slime, index) => {
+        if (slime.isDragging) return; // Don't arrange if dragging
+        
+        const groupIndex = Math.floor(index / a.GROUP_SIZE); // Group (vertical) position
+        const indexInGroup = index % a.GROUP_SIZE;
+        
+        // 5x2 grid coordinates within group
+        const col = indexInGroup % a.GROUP_COLS;
+        const row = Math.floor(indexInGroup / a.GROUP_COLS);
+        
+        // Final absolute coordinates
+        slime.x = startX + (col * spacing);
+        slime.y = startY + (groupIndex * (groupHeight + groupMarginY)) + (row * spacing);
+        
+        slime.el.style.left = `${slime.x - R}px`;
+        slime.el.style.top = `${slime.y - R}px`;
+      });
+
+      // Dynamically expand sandbox height based on slime count
+      const numGroups = Math.ceil(state.slimes.length / a.GROUP_SIZE);
+      const totalHeight = startY + (numGroups * (groupHeight + groupMarginY));
+      state.dom.sandbox.style.minHeight = `${Math.max(window.innerHeight, totalHeight)}px`;
+    }
+
+    function resetToChaosWalk() {
+      // Back to screen size min-height
+      state.dom.sandbox.style.minHeight = '100vh';
+      
+      // Restore individual speeds and set random angle for each slime (个性化を利用)
+      const scrollY = window.scrollY;
+      const viewHeight = window.innerHeight;
+      const R = CONFIG.SLIME.RADIUS;
+      
+      state.slimes.forEach(slime => {
+        // Use stored individual speed, random angle
+        const angle = Math.random() * Math.PI * 2;
+        const speed = slime.speed || CONFIG.SLIME.DEFAULT_SPEED;
+        
+        slime.vx = Math.cos(angle) * speed;
+        slime.vy = Math.sin(angle) * speed;
+        
+        // Pull back if left out of screen view due to scroll
+        if (slime.y > scrollY + viewHeight - R) {
+           slime.y = scrollY + viewHeight - R * 2;
+        }
+      });
+      
+      requestAnimationFrame(updatePhysicsSteadyWalk); // Restart physics loop
+      state.dom.whistleBtn.style.backgroundColor = CONFIG.SLIME.COLOR_DEFAULT; // Button color back
+    }
+
+    // --- UI State management ---
+    function updateUIState() {
+      const conf = CONFIG.UI;
+      const numSlimes = state.slimes.length;
+      
+      // Whistle appear threshold
+      if (numSlimes >= conf.WHISTLE_THRESHOLD) { state.dom.whistleBtn.classList.add('visible'); } 
+      else { state.dom.whistleBtn.classList.remove('visible'); }
+      
+      // Bomb appear threshold
+      if (numSlimes >= 1) { state.dom.bombBtn.classList.add('visible'); }
+      else { state.dom.bombBtn.classList.remove('visible'); }
+    }
+
+    function resetToInitialState() {
+      // Show onboarding
+      state.dom.onboarding.style.opacity = '1';
+      // Reset sandbox height
+      state.dom.sandbox.style.minHeight = '100vh';
+      // Reset flags
+      state.isArranged = false;
+      state.dom.whistleBtn.style.backgroundColor = CONFIG.SLIME.COLOR_DEFAULT;
+    }
+
+    // Start the sandbox
+    init();
+
+  </script>
+</body>
+</html>
